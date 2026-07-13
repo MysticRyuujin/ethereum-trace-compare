@@ -24,13 +24,14 @@ LOG_FIELDS = ["address", "topics", "data", "index", "position"]
 
 ERROR_CLASSES = [
     ("reverted", ["execution reverted", "revert"]),
+    ("write-protection", ["write protection", "static call", "staticcallviolation",
+                          "statechangeduringstaticcall", "state modification",
+                          "writeprotection"]),
     ("out-of-gas", ["out of gas", "outofgas", "gas uint64 overflow"]),
     ("invalid-opcode", ["invalid opcode", "bad instruction", "invalid instruction",
                         "opcode 0x", "badinstruction"]),
     ("stack-underflow", ["stack underflow", "stackunderflow"]),
     ("stack-overflow", ["stack overflow", "stack limit"]),
-    ("write-protection", ["write protection", "static call", "staticcallviolation",
-                          "state modification", "writeprotection"]),
     ("contract-collision", ["contract address collision", "collision"]),
     ("code-size", ["max code size", "code size limit", "initcode"]),
     ("insufficient-balance", ["insufficient balance", "insufficient funds"]),

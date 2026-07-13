@@ -5,8 +5,7 @@ for `debug_traceTransaction`, `debug_traceBlockByNumber`, and `debug_traceCall`
 (replaying transactions as calls), feeding the callTracer standardization effort
 in [ethereum/execution-apis] (follow-up to the opcode-tracer spec, PR #762).
 
-**Status: draft.** Live legs complete; reproducible local leg (deterministic
-test chain incl. ethrex) pending.
+**Status: draft.** Live legs and the reproducible local leg complete.
 
 ## Methodology
 
@@ -29,7 +28,16 @@ test chain incl. ethrex) pending.
   - **mainnet, archive trio** (geth, erigon, reth): 200 txs, same matrix —
     5,540 comparisons.
   - ethrex v20.0.0 exposes **no `debug_trace*` methods at all** (tracing exists
-    only in unreleased main); it is covered by the upcoming local leg.
+    only in unreleased main); it is covered by the local leg.
+  - **local, all 6 clients** (same versions; ethrex v20.0.0-main): hive client
+    images loaded with the execution-apis deterministic test chain, which now
+    contains a `calltree` contract whose single invocation produces every
+    frame type (nested CALL success/revert-with-reason, STATICCALL success/
+    write-protection failure, DELEGATECALL with depth-2 log, CALLCODE,
+    precompile call, CREATE + SELFDESTRUCT child, logs) — 1,060 comparisons
+    over controlled scenarios (`local/docker-compose.yml`). The same fixtures
+    also run in hive `rpc-compat`: geth green; erigon/nethermind/reth green on
+    all callTracer content; besu fails exactly its known non-conformances.
 
 ## Headline findings
 
@@ -44,6 +52,9 @@ test chain incl. ethrex) pending.
 | `debug_traceCall` default gas when omitted: `0x1000000` vs `0x23c34600` (geth/erigon/reth/nethermind) | smoke test |
 | empty `output` serialized as `"0x"` where others omit the key | 16 quirks |
 | `debug_traceTransaction` on an out-of-range block returns bare `Internal error` (NullPointerException in `DebugTraceTransaction.response`, besu 26.6.1) instead of a state-unavailable error | mainnet full node, reproduced on any tx |
+| **`to` omitted on successful CREATE frames** — the created contract address, reported by all other clients, is missing | local leg, 30 diffs, `calls[7]` of every calltree tx |
+| `debug_traceCall` rejects a block *hash* as the block parameter (`Invalid block param (block not found)`) | hive `calltracer-block-param-hash` |
+| `debug_traceCall` replay of type-1 (access-list) transactions rejected: `Transaction type ACCESS_LIST is invalid` | local leg, 4 errors |
 
 ### 2. nethermind: frame-level tree divergences
 
@@ -87,11 +98,38 @@ log). Likely upstream in `revm-inspectors`.
 
 Replaying txs as `debug_traceCall` at the parent block:
 
-- erigon rejects calls whose fee cap is below the block base fee
-  (`fee cap less than block base fee`); geth/erigon also reject on
-  `insufficient funds` in some replays where reth executes them.
-- besu's default gas (gas omitted) is 16.7M vs 600M elsewhere.
+- Fee validation splits the clients: geth, erigon, and nethermind reject
+  calls whose fee cap is below the block base fee (three different error
+  strings for it); **reth and besu execute them** (local leg: 272 rejections
+  each on geth/erigon/nethermind, zero on reth/besu). geth/erigon also
+  reject on `insufficient funds` in some live replays where reth executes.
+- besu's default gas (gas omitted) is 16.7M vs 600M elsewhere, and besu
+  rejects block-hash block params and type-1 replays (see §1).
 - ethrex doesn't implement the method; nor `debug_traceBlockByHash`.
+
+### 5b. Error strings: one failure, four spellings
+
+The same write-protection failure (SSTORE inside STATICCALL), from the
+calltree scenario, local leg:
+
+| client | `error` |
+|---|---|
+| geth, erigon | `out of gas: write protection` |
+| nethermind | `write protection` |
+| besu | `Illegal state change` |
+| reth | `StateChangeDuringStaticCall` |
+
+Only `execution reverted` is consistent across clients (besu included) —
+supporting a spec that mandates that exact string for REVERT and leaves other
+failure text free-form.
+
+### 5c. ethrex (v20.0.0-main)
+
+- Rejects the deterministic test chain at import: `Invalid Header, validation
+  failed pre-execution: Base fee per gas is incorrect` — could not trace any
+  on-chain tx in either the compose leg or hive (`Transaction not Found`).
+- `debug_traceCall` and `debug_traceBlockByHash` unimplemented; releases
+  through v20.0.0 have no `debug_trace*` at all.
 
 ### 6. What already agrees (the de-facto standard)
 
@@ -117,14 +155,19 @@ python aggregate_calltracer.py traces-<net>
 
 Client versions are recorded in each run's `traces-*/run_meta.json`.
 
+Additional local-leg confirmations: DELEGATECALL frames carry the parent
+context `value` (all clients, so `value` is only omitted for STATICCALL);
+SELFDESTRUCT appears as a child frame with the beneficiary as `to` (all
+clients); nethermind's missing callLog `index` reproduces deterministically.
+
 ## Next
 
-- Local leg: all 6 clients (incl. ethrex built from main) on the
-  execution-apis deterministic test chain, now containing a `calltree`
-  contract that exercises every frame type (nested CALL/rever/STATICCALL/
-  DELEGATECALL/CALLCODE/precompile/CREATE/SELFDESTRUCT + logs) in one tx.
-- Upstream issues: besu (delegatecall `from`, tracerConfig ignored, NPE),
-  nethermind (dropped frames, missing output), reth/revm-inspectors
-  (reverted-frame logs), cross-client (log index semantics).
+- Upstream issues: besu (delegatecall `from`, CREATE `to`, tracerConfig
+  ignored, gas accounting, NPE, block-hash param, type-1 traceCall),
+  nethermind (dropped frames, missing output, missing log index),
+  reth/revm-inspectors (reverted-frame logs, no fee validation in traceCall),
+  ethrex (chain import base-fee rejection, missing methods),
+  cross-client (log index semantics).
 - Spec PR: CallFrame/CallLog schema with the agreed baseline as MUSTs; log
-  `index` left optional pending semantics definition.
+  `index` left optional pending semantics definition; exact
+  `"execution reverted"` mandated, other error text free-form.

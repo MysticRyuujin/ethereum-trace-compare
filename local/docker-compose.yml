@@ -1,0 +1,57 @@
+# Local 6-client leg for callTracer comparison: hive client images loaded with
+# the execution-apis deterministic test chain. Env comes from hive.env
+# (generated from execution-apis tests/forkenv.json). Chain files are staged
+# under /input and copied into place by the entrypoint wrapper — the hive
+# entrypoints `mv` /genesis.json, which fails on a bind mount.
+#
+#   HIVE=~/github/hive EXECAPIS=~/github/execution-apis docker compose up -d --build
+
+x-common: &common
+  env_file: hive.env
+  volumes:
+    - ${EXECAPIS:-~/github/execution-apis}/tests/chain.rlp:/input/chain.rlp:ro
+    - ${EXECAPIS:-~/github/execution-apis}/tests/genesis.json:/input/genesis.json:ro
+
+services:
+  geth:
+    build:
+      context: ${HIVE:-~/github/hive}/clients/go-ethereum
+      args: {tag: v1.17.4}
+    <<: *common
+    entrypoint: ["/bin/sh", "-c", "cp /input/genesis.json /genesis.json && cp /input/chain.rlp /chain.rlp && exec /geth.sh"]
+    ports: ["38545:8545"]
+  erigon:
+    build:
+      context: ${HIVE:-~/github/hive}/clients/erigon
+      args: {tag: v3.5.1}
+    <<: *common
+    entrypoint: ["/bin/sh", "-c", "cp /input/genesis.json /genesis.json && cp /input/chain.rlp /chain.rlp && exec /erigon.sh"]
+    ports: ["38546:8545"]
+  nethermind:
+    build:
+      context: ${HIVE:-~/github/hive}/clients/nethermind
+      args: {tag: release-1.39.0}
+    <<: *common
+    entrypoint: ["/bin/sh", "-c", "cp /input/genesis.json /genesis.json && cp /input/chain.rlp /chain.rlp && exec /nethermind.sh"]
+    ports: ["38547:8545"]
+  besu:
+    build:
+      context: ${HIVE:-~/github/hive}/clients/besu
+      args: {tag: "26.6.1"}
+    <<: *common
+    entrypoint: ["/bin/sh", "-c", "cp /input/genesis.json /genesis.json && cp /input/chain.rlp /chain.rlp && exec /opt/besu/bin/besu-hive.sh"]
+    ports: ["38548:8545"]
+  reth:
+    build:
+      context: ${HIVE:-~/github/hive}/clients/reth
+      args: {tag: v2.3.0}
+    <<: *common
+    entrypoint: ["/bin/sh", "-c", "cp /input/genesis.json /genesis.json && cp /input/chain.rlp /chain.rlp && exec /reth.sh"]
+    ports: ["38549:8545"]
+  ethrex:
+    build:
+      context: ${HIVE:-~/github/hive}/clients/ethrex
+      args: {tag: main}
+    <<: *common
+    entrypoint: ["/bin/sh", "-c", "cp /input/genesis.json /genesis.json && cp /input/chain.rlp /chain.rlp && exec /ethrex.sh"]
+    ports: ["38550:8545"]
