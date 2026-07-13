@@ -42,3 +42,4 @@ traces/
 reports/
 *.md
 !README.md
+traces-test/

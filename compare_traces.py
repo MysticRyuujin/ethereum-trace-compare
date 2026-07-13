@@ -21,7 +21,16 @@ from typing import Any
 
 import requests
 
+from calltree_diff import compare_call_traces, compare_block_traces
+
 SUPPORTED_CLIENTS = ["geth", "besu", "reth", "nethermind", "erigon", "ethrex"]
+
+TRACER_CONFIGS = {
+    "default": {},
+    "onlyTopCall": {"onlyTopCall": True},
+    "withLog": {"withLog": True},
+    "onlyTopCallWithLog": {"onlyTopCall": True, "withLog": True},
+}
 
 # Known optional fields that some clients include but others don't
 # These are tracked as format quirks, not semantic differences
@@ -89,6 +98,38 @@ def trace_transaction(url: str, tx_hash: str) -> dict:
         "enableReturnData": True,
     }
     return rpc_call(url, "debug_traceTransaction", [tx_hash, tracer_config])
+
+
+def trace_transaction_calltracer(url: str, tx_hash: str, tracer_config: dict) -> dict:
+    """Call debug_traceTransaction with the callTracer."""
+    opts = {"tracer": "callTracer"}
+    if tracer_config:
+        opts["tracerConfig"] = tracer_config
+    return rpc_call(url, "debug_traceTransaction", [tx_hash, opts])
+
+
+def trace_block_calltracer(url: str, block_number: int, tracer_config: dict) -> list:
+    """Call debug_traceBlockByNumber with the callTracer."""
+    opts = {"tracer": "callTracer"}
+    if tracer_config:
+        opts["tracerConfig"] = tracer_config
+    return rpc_call(url, "debug_traceBlockByNumber", [hex(block_number), opts])
+
+
+def trace_call_calltracer(url: str, call_obj: dict, block: str, tracer_config: dict) -> dict:
+    """Call debug_traceCall with the callTracer."""
+    opts = {"tracer": "callTracer"}
+    if tracer_config:
+        opts["tracerConfig"] = tracer_config
+    return rpc_call(url, "debug_traceCall", [call_obj, block, opts])
+
+
+def get_client_version(url: str) -> str:
+    """Get web3_clientVersion, tolerating failures."""
+    try:
+        return rpc_call(url, "web3_clientVersion", timeout=10)
+    except Exception as e:
+        return f"error: {e}"
 
 
 def save_trace(trace_dir: Path, node_name: str, trace_data: dict | None, error: str | None = None) -> None:
@@ -780,6 +821,178 @@ def print_comparison_summary(tx_hash: str, comparison: dict) -> None:
                 print(f"  {client} optional fields: {list(fields.keys())}")
 
 
+def print_calltracer_summary(label: str, comparison: dict) -> None:
+    """Print a compact summary of a call-tree comparison."""
+    diffs = list(comparison["differences"])
+    quirks = dict(comparison.get("format_quirks", {}))
+    errors = comparison.get("errors", {})
+    for tx_hash, tx_cmp in comparison.get("per_tx", {}).items():
+        for d in tx_cmp["differences"]:
+            diffs.append({**d, "path": f"{tx_hash[:12]}…:{d.get('path', '')}"})
+        for k, v in tx_cmp.get("format_quirks", {}).items():
+            quirks.setdefault(k, {})
+            for field, items in v.items():
+                quirks[k].setdefault(field, []).extend(items)
+    parts = []
+    if diffs:
+        by_type = defaultdict(int)
+        for d in diffs:
+            by_type[d["type"]] += 1
+        parts.append("diffs: " + ", ".join(f"{t}={c}" for t, c in sorted(by_type.items())))
+    if quirks:
+        parts.append("quirks: " + ", ".join(f"{k}({len(v)})" for k, v in quirks.items()))
+    if errors:
+        parts.append("errors: " + ", ".join(f"{n}" for n in errors))
+    print(f"    {label}: " + ("; ".join(parts) if parts else "identical"))
+    for d in diffs[:5]:
+        path = d.get("path", "")
+        detail = {k: v for k, v in d.items() if k not in ("type", "path")}
+        detail_str = json.dumps(detail, default=str)
+        if len(detail_str) > 160:
+            detail_str = detail_str[:160] + "..."
+        print(f"      [{d['type']}] @{path or '<root>'} {detail_str}")
+    if len(diffs) > 5:
+        print(f"      ... and {len(diffs) - 5} more")
+
+
+def tx_to_call_object(tx: dict) -> dict:
+    """Build a debug_traceCall input from a transaction object."""
+    call_obj = {"from": tx["from"]}
+    fields = ["to", "gas", "value", "input", "maxFeePerGas", "maxPriorityFeePerGas"]
+    if tx.get("maxFeePerGas") is None:
+        fields.append("gasPrice")
+    for src in fields:
+        if tx.get(src) is not None:
+            call_obj[src] = tx[src]
+    if tx.get("type") in ("0x1", "0x2") and tx.get("accessList"):
+        call_obj["accessList"] = tx["accessList"]
+    return call_obj
+
+
+def fan_out(nodes: dict, fn, workers: int) -> dict:
+    """Run fn(client, url) across all nodes in parallel; collect {client: (result, error)}."""
+    results = {}
+
+    def call_one(client_url):
+        client, url = client_url
+        try:
+            return client, fn(client, url), None
+        except Exception as e:
+            return client, None, str(e)
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(call_one, (c, u)) for c, u in nodes.items()]
+        for future in as_completed(futures):
+            client, result, error = future.result()
+            results[client] = (result, error)
+    return results
+
+
+def run_calltracer(nodes: dict, tx_list: list, output_dir: Path, configs: list[str],
+                   methods: list[str], workers: int, first_url: str) -> dict:
+    """Collect and compare callTracer output for the selected methods/configs."""
+    all_comparisons = {}
+
+    run_meta = {
+        "tracer": "callTracer",
+        "methods": methods,
+        "configs": configs,
+        "client_versions": {c: get_client_version(u) for c, u in nodes.items()},
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with open(output_dir / "run_meta.json", "w") as f:
+        json.dump(run_meta, f, indent=2)
+    print("\nClient versions:")
+    for c, v in run_meta["client_versions"].items():
+        print(f"  {c}: {v}")
+
+    if "tx" in methods or "call-replay" in methods:
+        for tx_idx, (block_num, tx_hash) in enumerate(tx_list):
+            if _shutdown_requested:
+                print(f"\nStopping early ({tx_idx}/{len(tx_list)} traced)")
+                break
+            print(f"\n[{tx_idx + 1}/{len(tx_list)}] Block {block_num} - {tx_hash}")
+            tx_dir = output_dir / str(block_num) / tx_hash
+
+            tx_obj = None
+            if "call-replay" in methods:
+                try:
+                    tx_obj = rpc_call(first_url, "eth_getTransactionByHash", [tx_hash], timeout=10)
+                except Exception as e:
+                    print(f"    call-replay skipped (tx fetch failed: {e})")
+
+            for cfg_name in configs:
+                cfg = TRACER_CONFIGS[cfg_name]
+                if "tx" in methods:
+                    cfg_dir = tx_dir / cfg_name
+                    results = fan_out(nodes, lambda c, u: trace_transaction_calltracer(u, tx_hash, cfg), workers)
+                    traces = {}
+                    for client, (trace, error) in results.items():
+                        traces[client] = {"error": error} if error else trace
+                        save_trace(cfg_dir, client, None if error else trace, error)
+                    comparison = compare_call_traces(traces)
+                    with open(cfg_dir / "_comparison.json", "w") as f:
+                        json.dump(comparison, f, indent=2)
+                    all_comparisons[f"{tx_hash}/{cfg_name}"] = comparison
+                    print_calltracer_summary(f"tx/{cfg_name}", comparison)
+
+                if "call-replay" in methods and tx_obj:
+                    replay_dir = tx_dir / cfg_name / "call_replay"
+                    call_obj = tx_to_call_object(tx_obj)
+                    parent_block = hex(block_num - 1)
+                    results = fan_out(nodes, lambda c, u: trace_call_calltracer(u, call_obj, parent_block, cfg), workers)
+                    traces = {}
+                    for client, (trace, error) in results.items():
+                        traces[client] = {"error": error} if error else trace
+                        save_trace(replay_dir, client, None if error else trace, error)
+                    comparison = compare_call_traces(traces)
+                    with open(replay_dir / "_comparison.json", "w") as f:
+                        json.dump(comparison, f, indent=2)
+                    all_comparisons[f"{tx_hash}/{cfg_name}/call_replay"] = comparison
+                    print_calltracer_summary(f"call-replay/{cfg_name}", comparison)
+
+    if "block" in methods:
+        blocks = sorted({b for b, _ in tx_list})
+        for block_num in blocks:
+            if _shutdown_requested:
+                break
+            print(f"\n[block] {block_num}")
+            for cfg_name in configs:
+                cfg = TRACER_CONFIGS[cfg_name]
+                blk_dir = output_dir / str(block_num) / "_block" / cfg_name
+                results = fan_out(nodes, lambda c, u: trace_block_calltracer(u, block_num, cfg), workers)
+                traces = {}
+                for client, (trace, error) in results.items():
+                    traces[client] = {"error": error} if error else trace
+                    blk_dir.mkdir(parents=True, exist_ok=True)
+                    with open(blk_dir / f"{client}.json", "w") as f:
+                        json.dump(traces[client], f, indent=2)
+                comparison = compare_block_traces(traces)
+                with open(blk_dir / "_comparison.json", "w") as f:
+                    json.dump(comparison, f, indent=2)
+                all_comparisons[f"block-{block_num}/{cfg_name}"] = comparison
+                print_calltracer_summary(f"block/{cfg_name}", comparison)
+
+    print(f"\n{'='*80}")
+    print("CALLTRACER SUMMARY")
+    print(f"{'='*80}")
+    with_diffs = sum(1 for c in all_comparisons.values() if c["differences"])
+    print(f"Comparisons with differences: {with_diffs}/{len(all_comparisons)}")
+    diff_types = defaultdict(int)
+    for c in all_comparisons.values():
+        for d in c["differences"]:
+            diff_types[d["type"]] += 1
+        for tx_cmp in c.get("per_tx", {}).values():
+            for d in tx_cmp["differences"]:
+                diff_types[d["type"]] += 1
+    if diff_types:
+        print("\nDifference types:")
+        for t, n in sorted(diff_types.items(), key=lambda x: -x[1]):
+            print(f"  {t}: {n}")
+    print(f"\nOutput directory: {output_dir.absolute()}")
+    return all_comparisons
+
+
 def main():
     parser = argparse.ArgumentParser(description="Compare debug_traceTransaction across Ethereum clients")
     parser.add_argument("--block", type=int, help="Specific block number to trace (default: auto-detect)")
@@ -791,6 +1004,13 @@ def main():
     parser.add_argument("--workers", type=int, default=5, help="Number of parallel workers")
     parser.add_argument("--header", "-H", action="append", metavar="NAME:VALUE",
                         help="HTTP header to include in requests (can be specified multiple times)")
+    parser.add_argument("--tracer", choices=["structlog", "calltracer"], default="structlog",
+                        help="Tracer to compare (default: structlog)")
+    parser.add_argument("--methods", type=str, default="tx",
+                        help="calltracer only: comma list of tx,block,call-replay (default: tx)")
+    parser.add_argument("--configs", type=str, default="default,onlyTopCall,withLog",
+                        help="calltracer only: comma list of tracerConfig variants: "
+                             f"{','.join(TRACER_CONFIGS)} (default: default,onlyTopCall,withLog)")
 
     # Client endpoint arguments
     parser.add_argument("--geth", type=str, help="Geth RPC endpoint URL")
@@ -962,6 +1182,18 @@ def main():
     if not tx_list:
         print("ERROR: No transactions to trace")
         sys.exit(1)
+
+    if args.tracer == "calltracer":
+        methods = [m.strip() for m in args.methods.split(",") if m.strip()]
+        bad = [m for m in methods if m not in ("tx", "block", "call-replay")]
+        if bad:
+            parser.error(f"unknown --methods entries: {bad}")
+        configs = [c.strip() for c in args.configs.split(",") if c.strip()]
+        bad = [c for c in configs if c not in TRACER_CONFIGS]
+        if bad:
+            parser.error(f"unknown --configs entries: {bad} (choose from {list(TRACER_CONFIGS)})")
+        run_calltracer(nodes, tx_list, output_dir, configs, methods, args.workers, first_url)
+        return
 
     # Step 4: Trace transactions on all nodes
     all_comparisons = {}
