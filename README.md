@@ -2,6 +2,28 @@
 
 Compare `debug_traceTransaction` output across multiple Ethereum execution clients to identify behavioral differences and quirks.
 
+This fork adds a **callTracer comparison mode** (`--tracer calltracer`): a recursive,
+path-aware diff of call-frame trees across `debug_traceTransaction`,
+`debug_traceBlockByNumber`, and `debug_traceCall` (replaying transactions as calls),
+with a tracerConfig matrix (`default`, `onlyTopCall`, `withLog`, `onlyTopCallWithLog`).
+
+```bash
+python compare_traces.py \
+  --tracer calltracer \
+  --methods tx,block,call-replay \
+  --configs default,onlyTopCall,withLog \
+  --geth http://localhost:18545 --erigon http://localhost:18546 ... \
+  --block 25510000 --max-txs 50
+```
+
+callTracer results are stored per config: `traces/<block>/<tx>/<config>/<client>.json`
+(+ `_comparison.json`), block traces under `traces/<block>/_block/<config>/`,
+call replays under `traces/<block>/<tx>/<config>/call_replay/`. Client versions are
+recorded in `traces/run_meta.json`. Differences are classified as semantic
+(`value_mismatch`, `missing_field`, `missing_frame`, `call_count_mismatch`,
+`log_count_mismatch`, `error_class_mismatch`, block-wrapper checks) vs wire-format
+quirks (omitted-vs-null-vs-`"0x"`, hex padding/case, error wording).
+
 ## Requirements
 
 ```bash
