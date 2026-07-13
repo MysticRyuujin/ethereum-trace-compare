@@ -12,8 +12,11 @@ Working tracker for landing the callTracer spec. Artifacts that exist today:
 ## Order of operations
 
 ```
-1. hive PR (hivechain calltree)          ── independent, open first
-2. execution-apis DRAFT PR               ── references 1 + report; discussion starts
+0. hive #1567 + execution-apis #846      ── already open (osaka/bpo chain bump);
+   land these first — see interaction note below
+1. hive PR (hivechain calltree)          ── stacked on #1567; open next
+2. execution-apis DRAFT PR               ── rebased onto #846 (fixtures regenerated on
+                                            the osaka chain); references 1 + report
 3. client-repo issues                    ── parallel with discussion (besu, nethermind,
                                             reth/revm-inspectors, ethrex)
 4. geth PR (optional Block param)        ── once discussion confirms the optional-Block
@@ -24,6 +27,25 @@ Working tracker for landing the callTracer spec. Artifacts that exist today:
    flip settled SpecOnly tests to exact-match → undraft → merge
 7. post-merge: client teams implement; conformance tracked via hive rpc-compat
 ```
+
+**Interaction with the in-flight osaka/bpo chain bump** (hive
+[#1567](https://github.com/ethereum/hive/pull/1567) + execution-apis
+[#846](https://github.com/ethereum/execution-apis/pull/846), both open): land
+those FIRST.
+
+- hive side: no conflict — `hivechain-calltree` is stacked directly on
+  #1567's commit; the only shared file (`genesis.go`) is touched in disjoint
+  regions, and #846's `-disable-txmods tx-largereceipt` doesn't affect the
+  calltree mods (the flag takes an explicit list).
+- execution-apis side: #846 and `calltracer-spec` both regenerate
+  `tests/chain.rlp` + every fixture, so the whole fixture tree conflicts
+  textually. Resolution is regeneration, not merging: after #1567 + the
+  calltree hive PR + #846 land, rebase `calltracer-spec` keeping only the
+  code commits (drop `6c4691c` and all fixture hunks), rebuild hivechain from
+  hive master, run the osaka `mkchain.sh` (bpo2, length 54), and one
+  `make fill` regenerates everything — the callTracer fixtures then exercise
+  the osaka-era chain from day one. The testgen cases look transactions up
+  via `txinfo.json` entries, so the chain bump can't shadow them.
 
 Why this order:
 
