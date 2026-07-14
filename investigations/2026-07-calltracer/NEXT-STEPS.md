@@ -47,6 +47,22 @@ those FIRST.
   the osaka-era chain from day one. The testgen cases look transactions up
   via `txinfo.json` entries, so the chain bump can't shadow them.
 
+**Queued for the rebase regeneration** (bytecode edits from the pre-PR code
+review, batched so calltree.bin recompiles exactly once alongside the chain
+regen):
+
+- calltree.eas §5: pin the DELEGATECALL calldata with an explicit `mstore`
+  (today it reads residual memory from §2 — hidden ordering dependency).
+- calltree.eas §7: identity-precompile retOff/retSize `0x140/4` → `0/0`
+  (nothing reads the copy).
+- calltree.eas return: `return(0x100, 2)` for exact callme output instead of
+  zero-padding to 32 (optional; comment already corrected).
+
+Already applied in the amended commit (`hivechain-calltree` @ c0192532):
+trimmed header/doc/commit verbosity, predeploy rationale recorded in
+genesis.go, unread `Contract` field dropped from txinfo (both repos), and
+mod_calltree_test.go guarding the genesis↔bytecode address coupling.
+
 Why this order:
 
 - **hive first** because the execution-apis branch's regenerated `tools/chain`
