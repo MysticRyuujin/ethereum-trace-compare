@@ -12,6 +12,7 @@ verified green as of 2026-07-14.
 | Test-chain calltree scenarios | `~/github/hive` branch **`hivechain-calltree`** (1 commit `c0192532`, unpushed; stacked on #1567's commit) | verified: chain regenerates, calltree tx traced in geth (all 8 frame types), `go test ./cmd/hivechain` green |
 | Comparison tool + divergence report | this repo, pushed (`compare_traces.py --tracer calltracer`, `calltree_diff.py`, `aggregate_calltracer.py`, README.md report, per-leg summaries) | complete: sepolia 5-client, mainnet trio, local 6-client legs (~8,600 comparisons) |
 | geth change (traceCall optional Block) | not written | small; description ready (§PR-C) |
+| hive rpc-compat speconly branch selection | `~/github/hive` branch **`rpc-compat-tracer-schema`** (1 commit `a9d84255`, unpushed; based on plain master, independent of everything) | verified: unit tests (`go test ./simulators/ethereum/rpc-compat`), live run vs geth 32/32 green; backward-compatible with pre-callTracer specs (opcode branch existed since #762; unknown tracers keep the escape hatch) |
 | rpcwright skill | `~/github/rpcwright` `references/tracers.md` (pushed, synced to `~/.claude/skills`) | captures the recipes + gotchas from this effort |
 
 Both branches were code-reviewed (8-angle + verification); every finding is
@@ -45,9 +46,11 @@ is deferred without a home.
 - [ ] **4. geth PR-C** — only after PR-B open question 5 gets a nod; then
       bump `tools/go.mod` in execution-apis and add the omitted-Block fixture
       to PR-B.
-- [ ] **5. hive rpc-compat parity PR**: port speccheck's tracer-aware branch
-      selection (`tools/cmd/speccheck/tracer.go`) to the simulator's
-      `schema.go` speconly path. Land before PR-B undrafts.
+- [ ] **5. hive rpc-compat parity PR-D**: branch `rpc-compat-tracer-schema`
+      is written and tested — push and open ANY TIME (independent of every
+      other gate; safe against current execution-apis main). Must be merged
+      before PR-B undrafts so the conformance matrix isn't vacuous for
+      speconly tests. Description: see §PR-D.
 - [ ] **6. Undraft PR-B** when the criteria at the bottom hold.
 - [ ] **7. Post-merge**: client teams implement; conformance tracked via
       hive rpc-compat.
@@ -207,6 +210,29 @@ Not yet implemented; open after PR-B open question 5 gets a nod:
 After merge: bump the geth pin in execution-apis `tools/go.mod`, add the
 omitted-Block testgen case + fixture to PR-B.
 
+## PR-D: hive — `simulators/ethereum/rpc-compat: tracer-aware schema selection for speconly tests`
+
+Branch `rpc-compat-tracer-schema`. Suggested description:
+
+> speconly tests validate the client's response against the method's OpenRPC
+> result schema. For the debug_trace* methods that schema is an anyOf whose
+> named-tracer escape-hatch branch is deliberately unconstrained — so
+> whole-schema validation accepts any value and speconly enforcement is
+> vacuous for tracing methods.
+>
+> This selects the anyOf branch matching the tracer the test requested
+> (mirroring execution-apis' speccheck): no tracer → the opcode branch,
+> callTracer → the Call tracer branch, anything else → the whole schema as
+> before. A known tracer with no matching branch is an error rather than a
+> fallback, so a spec title reword cannot silently disable validation.
+> Branches are extracted from the raw document because the generated OpenRPC
+> union types do not survive a second marshal round-trip.
+>
+> Backward-compatible: against a spec without callTracer branches, opcode
+> speconly fixtures still validate (the "Opcode tracer" branches have existed
+> since the opcode-tracer standardization), and no fixture in that era
+> requests callTracer. Pairs with the callTracer spec PR: <link PR-B>.
+
 ## Client-repo issues (file during discussion; we offer patches)
 
 | Repo | Issue(s) | Willing to PR? |
@@ -215,7 +241,6 @@ omitted-Block testgen case + fixture to PR-B.
 | nethermind | dropped CALL frame after STATICCALL to same target; missing `output` on some frames | yes (repro-first from report txs) |
 | reth → revm-inspectors | reverted-frame logs not cleared (pending open question 2) | yes, small |
 | ethrex | hive-chain import rejected ("Base fee per gas is incorrect"); null serialization; callTracer-as-default; missing `debug_traceCall`/`traceBlockByHash`; no `eth_call` state-override support | issues only (fast-moving codebase) |
-| hive | port speccheck branch selection to rpc-compat `schema.go` | yes, small |
 
 ## Decisions log
 
