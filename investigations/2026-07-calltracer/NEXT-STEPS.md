@@ -214,8 +214,10 @@ Branch `calltracer-spec`. Suggested description:
 > widens acceptance only, no new client failures); `tracerConfig` is bound to
 > CallTracerConfig via an if/then conditional (wrong-typed option values now
 > fail validation; unknown keys remain allowed by design, since clients MAY
-> accept extension options). Still deferred: a specgen guard rejecting
-> absolute `$ref`s that match no embedded `$id`.
+> accept extension options); specgen collects embedded `$id`s and rejects
+> absolute `$ref`s that match none, so a typo'd recursive reference fails
+> the build instead of shipping as a dangling link. Nothing from the pre-PR
+> review remains deferred.
 
 ## PR-C: go-ethereum — `eth/tracers: make debug_traceCall block parameter optional`
 
