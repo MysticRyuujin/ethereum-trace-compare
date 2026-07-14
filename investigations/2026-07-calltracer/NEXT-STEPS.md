@@ -201,6 +201,19 @@ Branch `calltracer-spec`. Suggested description:
 > 6. Side-note: the reused `AccountOverride` schema requires `state` or
 >    `stateDiff`, so a code-only override does not validate although geth
 >    accepts it — pre-existing strictness worth a separate fix.
+> 7. **Publishing the recursive schema** — the built `openrpc.json` expresses
+>    CallFrame recursion via an embedded `$id` and absolute-URI self-`$ref`
+>    (specgen inlines everything else; a fragment self-ref would be a cycle
+>    error). Consumers that resolve `$ref`s by HTTP fetch rather than JSON
+>    Schema `$id` semantics will not resolve it. Options: publish the
+>    CallFrame schema document at that URL from deploy.yaml, or document the
+>    `$id`-resolution requirement. Maintainer preference wanted.
+> 8. Deferred small items from pre-PR review (deliberately out of scope to
+>    keep the diff tight): an error alternative on the *opcode* block entry
+>    (geth emits `{txHash, error}` for the struct logger too — arguably a
+>    #762 gap); binding `tracerConfig` to CallTracerConfig via a schema
+>    conditional (today it is prose-only, so a typo'd config key validates);
+>    a specgen guard rejecting absolute `$ref`s that match no embedded `$id`.
 
 ## PR-C: go-ethereum — `eth/tracers: make debug_traceCall block parameter optional`
 
